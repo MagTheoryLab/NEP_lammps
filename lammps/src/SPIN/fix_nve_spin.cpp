@@ -39,8 +39,10 @@
 #include "pair_hybrid.h"
 #include "pair_spin.h"
 #include "update.h"
+#include "utils.h"
 
 #include <cstring>
+#include <cstdio>
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
@@ -77,6 +79,10 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   nlocal_max = 0;
   npairs = 0;
   npairspin = 0;
+  nep_fm_left_iface = nullptr;
+  group_sums_local = group_sums_global = nullptr;
+  energy_group_file = nullptr;
+  energy_iface_file = nullptr;
 
   // test nprec
   nprecspin = nlangspin = nsetspin = 0;
@@ -89,6 +95,14 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   // define sector_flag
 
   sector_flag = (comm->nprocs > 1) ? 1 : 0;
+  energy_track_flag = 0;
+  energy_track_every = 1;
+  iface_axis = 0;
+  iface_pos = 0.0;
+  iface_half_width = 0.0;
+  iface_enable = 0;
+  energy_group_file = utils::strdup("group_sums.txt");
+  energy_iface_file = utils::strdup("energy_interface.txt");
 
   // defining lattice_flag
 
@@ -106,6 +120,42 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
         lattice_flag = 1;
       else error->all(FLERR,"Illegal fix/nve/spin command");
       iarg += 2;
+    } else if (strcmp(arg[iarg],"energy_track") == 0) {
+      if (iarg + 2 > narg) error->all(FLERR, "Illegal fix/nve/spin command");
+      const std::string opt = arg[iarg+1];
+      if ((opt == "yes") || (opt == "on") || (opt == "true")) energy_track_flag = 1;
+      else if ((opt == "no") || (opt == "off") || (opt == "false")) energy_track_flag = 0;
+      else error->all(FLERR, "Illegal fix/nve/spin command");
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"etrack_every") == 0) {
+      if (iarg + 2 > narg) error->all(FLERR, "Illegal fix/nve/spin command");
+      energy_track_every = utils::inumeric(FLERR, arg[iarg+1], false, lmp);
+      if (energy_track_every <= 0) error->all(FLERR, "Illegal fix/nve/spin command");
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"etrack_file_group") == 0) {
+      if (iarg + 2 > narg) error->all(FLERR, "Illegal fix/nve/spin command");
+      delete[] energy_group_file;
+      energy_group_file = utils::strdup(arg[iarg+1]);
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"etrack_file_iface") == 0) {
+      if (iarg + 2 > narg) error->all(FLERR, "Illegal fix/nve/spin command");
+      delete[] energy_iface_file;
+      energy_iface_file = utils::strdup(arg[iarg+1]);
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"iface") == 0) {
+      if (iarg + 7 > narg) error->all(FLERR, "Illegal fix/nve/spin command");
+      if (strcmp(arg[iarg+1], "axis") != 0 || strcmp(arg[iarg+3], "position") != 0 ||
+          strcmp(arg[iarg+5], "half_width") != 0)
+        error->all(FLERR, "Illegal fix/nve/spin command");
+      const std::string axis = arg[iarg+2];
+      if (axis == "x") iface_axis = 0;
+      else if (axis == "y") iface_axis = 1;
+      else if (axis == "z") iface_axis = 2;
+      else error->all(FLERR, "Illegal fix/nve/spin command");
+      iface_pos = utils::numeric(FLERR, arg[iarg+4], false, lmp);
+      iface_half_width = utils::numeric(FLERR, arg[iarg+6], false, lmp);
+      iface_enable = (iface_half_width > 0.0);
+      iarg += 7;
     } else error->all(FLERR,"Illegal fix/nve/spin command");
   }
 
@@ -137,9 +187,13 @@ FixNVESpin::~FixNVESpin()
   memory->destroy(stack_foot);
   memory->destroy(forward_stacks);
   memory->destroy(backward_stacks);
+  memory->destroy(group_sums_local);
+  memory->destroy(group_sums_global);
   delete [] spin_pairs;
   delete [] locklangevinspin;
   delete [] lockprecessionspin;
+  delete [] energy_group_file;
+  delete [] energy_iface_file;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -218,6 +272,21 @@ void FixNVESpin::init()
   pair_nep = force->pair_match("^nep/spin/gpu",0);
   if (!pair_nep) pair_nep = force->pair_match("^nep/spin/gpu/kk",0);
   nep_global_recompute_flag = (pair_nep != nullptr);
+  nep_fm_left_iface = nullptr;
+  if (nep_global_recompute_flag) {
+    int dim = 0;
+    auto *iface_x_ptr = reinterpret_cast<double *>(pair_nep->extract("iface_x_ptr", dim));
+    auto *iface_hw_ptr = reinterpret_cast<double *>(pair_nep->extract("iface_half_width_ptr", dim));
+    if (iface_enable) {
+      if (iface_axis != 0)
+        error->all(FLERR, "fix nve/spin iface axis must be x for NEP left-interface channel");
+      if (iface_x_ptr && iface_hw_ptr) {
+        *iface_x_ptr = iface_pos;
+        *iface_hw_ptr = iface_half_width;
+      }
+    }
+    nep_fm_left_iface = reinterpret_cast<double *>(pair_nep->extract("fm_left_iface_ptr", dim));
+  }
   if (nep_global_recompute_flag) pair_spin_flag = 0;
 
   // set pair/spin and long/spin flags
@@ -323,6 +392,8 @@ void FixNVESpin::init()
   memory->grow(stack_foot,nsectors,"nve/spin:stack_foot");
   memory->grow(backward_stacks,nlocal_max,"nve/spin:backward_stacks");
   memory->grow(forward_stacks,nlocal_max,"nve/spin:forward_stacks");
+  memory->grow(group_sums_local, group->ngroup, "nve/spin:group_sums_local");
+  memory->grow(group_sums_global, group->ngroup, "nve/spin:group_sums_global");
 }
 
 /* ---------------------------------------------------------------------- */
@@ -331,6 +402,7 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
 {
   double dtfm;
 
+  double **sp = atom->sp;
   double **x = atom->x;
   double **v = atom->v;
   double **f = atom->f;
@@ -340,6 +412,54 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
   int *type = atom->type;
   int *mask = atom->mask;
+  const bool do_track = energy_track_flag && (update->ntimestep % energy_track_every == 0);
+  double energy_diff_one_side_local = 0.0;
+  if (do_track) {
+    for (int j = 0; j < group->ngroup; ++j) group_sums_local[j] = 0.0;
+  }
+
+  auto in_interface = [&](int i) {
+    if (!iface_enable) return false;
+    const double d = x[i][iface_axis] - iface_pos;
+    return (d <= iface_half_width && d >= -iface_half_width);
+  };
+
+  auto advance_spin_plain = [&](int i) {
+    ComputeInteractionsSpin(i);
+    AdvanceSingleSpin(i);
+  };
+
+  auto advance_spin_track = [&](int i) {
+    double fmi_full[3] = {0.0, 0.0, 0.0};
+    double fmi_left[3] = {0.0, 0.0, 0.0};
+    double e_no_langevin = 0.0;
+    double e_single = 0.0;
+    double e_left_before = 0.0;
+    double e_left_after = 0.0;
+
+    const bool on_iface = in_interface(i);
+    if (on_iface) {
+      ComputeInteractionsSpinOneSide(i, fmi_left);
+      AdvanceSingleSpinPredict(i, fmi_left, &e_left_before);
+    }
+
+    ComputeInteractionsSpin(i, fmi_full);
+    AdvanceSingleSpinPredict(i, fmi_full, &e_no_langevin);
+    AdvanceSingleSpin(i);
+
+    e_single = (sp[i][0] * fmi_full[0]) + (sp[i][1] * fmi_full[1]) + (sp[i][2] * fmi_full[2]);
+    const double energy_diff_langevin = (e_single - e_no_langevin) * hbar_local;
+
+    if (on_iface) {
+      ComputeInteractionsSpinOneSide(i, fmi_left);
+      AdvanceSingleSpinPredict(i, fmi_left, &e_left_after);
+      energy_diff_one_side_local += (e_left_after - e_left_before) * hbar_local;
+    }
+
+    for (int j = 0; j < group->ngroup; j++) {
+      if (mask[i] & group->bitmask[j]) group_sums_local[j] += energy_diff_langevin;
+    }
+  };
 
   // update half v for all atoms
 
@@ -363,8 +483,8 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
       int i = stack_foot[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
-          ComputeInteractionsSpin(i);
-          AdvanceSingleSpin(i);
+          if (do_track) advance_spin_track(i);
+          else advance_spin_plain(i);
           i = forward_stacks[i];
         }
       }
@@ -374,8 +494,8 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
       int i = stack_head[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
-          ComputeInteractionsSpin(i);
-          AdvanceSingleSpin(i);
+          if (do_track) advance_spin_track(i);
+          else advance_spin_plain(i);
           i = backward_stacks[i];
         }
       }
@@ -384,14 +504,14 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     comm->forward_comm();                        // comm. positions of ghost atoms
     for (int i = 0; i < nlocal; i++) {           // advance quarter s for nlocal
       if (mask[i] & groupbit) {
-        ComputeInteractionsSpin(i);
-        AdvanceSingleSpin(i);
+        if (do_track) advance_spin_track(i);
+        else advance_spin_plain(i);
       }
     }
     for (int i = nlocal-1; i >= 0; i--) {        // advance quarter s for nlocal
       if (mask[i] & groupbit) {
-        ComputeInteractionsSpin(i);
-        AdvanceSingleSpin(i);
+        if (do_track) advance_spin_track(i);
+        else advance_spin_plain(i);
       }
     }
   }
@@ -416,8 +536,8 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
       int i = stack_foot[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
-          ComputeInteractionsSpin(i);
-          AdvanceSingleSpin(i);
+          if (do_track) advance_spin_track(i);
+          else advance_spin_plain(i);
           i = forward_stacks[i];
         }
       }
@@ -427,8 +547,8 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
       int i = stack_head[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
-          ComputeInteractionsSpin(i);
-          AdvanceSingleSpin(i);
+          if (do_track) advance_spin_track(i);
+          else advance_spin_plain(i);
           i = backward_stacks[i];
         }
       }
@@ -437,14 +557,37 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     comm->forward_comm();                       // comm. positions of ghost atoms
     for (int i = 0; i < nlocal; i++) {          // advance quarter s for nlocal-1
       if (mask[i] & groupbit) {
-        ComputeInteractionsSpin(i);
-        AdvanceSingleSpin(i);
+        if (do_track) advance_spin_track(i);
+        else advance_spin_plain(i);
       }
     }
     for (int i = nlocal-1; i >= 0; i--) {       // advance quarter s for nlocal-1
       if (mask[i] & groupbit) {
-        ComputeInteractionsSpin(i);
-        AdvanceSingleSpin(i);
+        if (do_track) advance_spin_track(i);
+        else advance_spin_plain(i);
+      }
+    }
+  }
+
+  if (do_track) {
+    MPI_Allreduce(group_sums_local, group_sums_global, group->ngroup, MPI_DOUBLE, MPI_SUM, world);
+    double energy_diff_one_side_global = 0.0;
+    MPI_Allreduce(&energy_diff_one_side_local, &energy_diff_one_side_global, 1, MPI_DOUBLE, MPI_SUM, world);
+
+    if (comm->me == 0) {
+      FILE *fp1 = std::fopen(energy_group_file, "a");
+      if (fp1) {
+        std::fprintf(fp1, BIGINT_FORMAT, update->ntimestep);
+        for (int j = 0; j < group->ngroup; j++) {
+          std::fprintf(fp1, " %s: %.15g", group->names[j], group_sums_global[j]);
+        }
+        std::fprintf(fp1, "\n");
+        std::fclose(fp1);
+      }
+      FILE *fp2 = std::fopen(energy_iface_file, "a");
+      if (fp2) {
+        std::fprintf(fp2, BIGINT_FORMAT " %.15g\n", update->ntimestep, energy_diff_one_side_global);
+        std::fclose(fp2);
       }
     }
   }
@@ -540,6 +683,15 @@ void FixNVESpin::restore_lattice_force()
 
 void FixNVESpin::ComputeInteractionsSpin(int i)
 {
+  ComputeInteractionsSpin(i, nullptr);
+}
+
+/* ----------------------------------------------------------------------
+   compute magnetic torque for spin i and optionally store pair-only channel
+---------------------------------------------------------------------- */
+
+void FixNVESpin::ComputeInteractionsSpin(int i, double *fmi_pairs)
+{
   double spi[3], fmi[3];
 
   double **sp = atom->sp;
@@ -560,6 +712,8 @@ void FixNVESpin::ComputeInteractionsSpin(int i)
     pair_nep->compute(0,0);
     if (force->newton) comm->reverse_comm();
 
+    int dim = 0;
+    nep_fm_left_iface = reinterpret_cast<double *>(pair_nep->extract("fm_left_iface_ptr", dim));
     const double inv_hbar = (hbar_local > 0.0) ? (1.0 / hbar_local) : 0.0;
     const double scale = sp[i][3] * 2.0 * inv_hbar;
     fmi[0] += scale * fm[i][0];
@@ -575,6 +729,11 @@ void FixNVESpin::ComputeInteractionsSpin(int i)
     for (int k = 0; k < npairspin; k++) {
       spin_pairs[k]->compute_single_pair(i,fmi);
     }
+  }
+  if (fmi_pairs) {
+    fmi_pairs[0] = fmi[0];
+    fmi_pairs[1] = fmi[1];
+    fmi_pairs[2] = fmi[2];
   }
 
   // update magnetic precession interactions
@@ -604,6 +763,56 @@ void FixNVESpin::ComputeInteractionsSpin(int i)
   fm[i][0] = fmi[0];
   fm[i][1] = fmi[1];
   fm[i][2] = fmi[2];
+}
+
+/* ----------------------------------------------------------------------
+   compute one-side magnetic torque channel for spin i (does not write fm[i])
+---------------------------------------------------------------------- */
+
+void FixNVESpin::ComputeInteractionsSpinOneSide(int i, double *fmi_one_side)
+{
+  double spi[3], fmi[3];
+  double **sp = atom->sp;
+  double **fm = atom->fm;
+
+  spi[0] = sp[i][0];
+  spi[1] = sp[i][1];
+  spi[2] = sp[i][2];
+  fmi[0] = fmi[1] = fmi[2] = 0.0;
+
+  if (nep_global_recompute_flag) {
+    backup_lattice_force();
+    pair_nep->compute(0,0);
+    if (force->newton) comm->reverse_comm();
+    int dim = 0;
+    nep_fm_left_iface = reinterpret_cast<double *>(pair_nep->extract("fm_left_iface_ptr", dim));
+    const double inv_hbar = (hbar_local > 0.0) ? (1.0 / hbar_local) : 0.0;
+    const double scale = sp[i][3] * 2.0 * inv_hbar;
+    if (nep_fm_left_iface) {
+      fmi[0] += scale * nep_fm_left_iface[3*i+0];
+      fmi[1] += scale * nep_fm_left_iface[3*i+1];
+      fmi[2] += scale * nep_fm_left_iface[3*i+2];
+    } else {
+      fmi[0] += scale * fm[i][0];
+      fmi[1] += scale * fm[i][1];
+      fmi[2] += scale * fm[i][2];
+    }
+    restore_lattice_force();
+  } else if (pair_spin_flag) {
+    for (int k = 0; k < npairspin; k++) spin_pairs[k]->compute_single_pair(i, fmi);
+  }
+
+  if (precession_spin_flag) {
+    for (int k = 0; k < nprecspin; k++) lockprecessionspin[k]->compute_single_precession(i, spi, fmi);
+  }
+  if (maglangevin_flag) {
+    for (int k = 0; k < nlangspin; k++) locklangevinspin[k]->compute_single_langevin(i, spi, fmi);
+  }
+  if (setforce_spin_flag) locksetforcespin->single_setforce_spin(i, fmi);
+
+  fmi_one_side[0] = fmi[0];
+  fmi_one_side[1] = fmi[1];
+  fmi_one_side[2] = fmi[2];
 }
 
 /* ----------------------------------------------------------------------
@@ -761,6 +970,41 @@ void FixNVESpin::AdvanceSingleSpin(int i)
     }
   }
 
+}
+
+/* ----------------------------------------------------------------------
+   predict spin advance under supplied magnetic torque without writing back spin
+---------------------------------------------------------------------- */
+
+void FixNVESpin::AdvanceSingleSpinPredict(int i, const double *fmi, double *energy_out)
+{
+  double **sp = atom->sp;
+  double fm2,energy,dts2;
+  double cp[3],g[3];
+
+  cp[0] = cp[1] = cp[2] = 0.0;
+  g[0] = g[1] = g[2] = 0.0;
+  fm2 = (fmi[0]*fmi[0])+(fmi[1]*fmi[1])+(fmi[2]*fmi[2]);
+  energy = (sp[i][0]*fmi[0])+(sp[i][1]*fmi[1])+(sp[i][2]*fmi[2]);
+  dts2 = dts*dts;
+
+  cp[0] = fmi[1]*sp[i][2] - fmi[2]*sp[i][1];
+  cp[1] = fmi[2]*sp[i][0] - fmi[0]*sp[i][2];
+  cp[2] = fmi[0]*sp[i][1] - fmi[1]*sp[i][0];
+
+  g[0] = sp[i][0] + cp[0]*dts;
+  g[1] = sp[i][1] + cp[1]*dts;
+  g[2] = sp[i][2] + cp[2]*dts;
+
+  g[0] += (fmi[0]*energy - 0.5*sp[i][0]*fm2)*0.5*dts2;
+  g[1] += (fmi[1]*energy - 0.5*sp[i][1]*fm2)*0.5*dts2;
+  g[2] += (fmi[2]*energy - 0.5*sp[i][2]*fm2)*0.5*dts2;
+
+  g[0] /= (1.0 + 0.25*fm2*dts2);
+  g[1] /= (1.0 + 0.25*fm2*dts2);
+  g[2] /= (1.0 + 0.25*fm2*dts2);
+
+  *energy_out = (g[0]*fmi[0]) + (g[1]*fmi[1]) + (g[2]*fmi[2]);
 }
 
 /* ---------------------------------------------------------------------- */
