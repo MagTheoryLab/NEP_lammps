@@ -1,0 +1,1 @@
+mpirun -np 1 /opt/software/lammps-29Aug2024/build-kokkos-nep-mpi/lmp -in lmp.in

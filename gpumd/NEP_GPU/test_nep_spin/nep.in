@@ -1,0 +1,14 @@
+type 1 Fe
+cutoff 7 6
+
+lambda_e 1
+lambda_f 1
+lambda_m 2
+lambda_v 0   
+spin_mode 2
+spin_feature 2 2 2 2 2 0 1 1
+generation 100
+prediction 1
+batch 10000
+charge_mode 0
+ 

@@ -1,0 +1,19 @@
+diff --git a/cmake/CMakeLists.txt b/cmake/CMakeLists.txt
+--- a/cmake/CMakeLists.txt
++++ b/cmake/CMakeLists.txt
+@@ -336,6 +336,7 @@
+   SRD
+   TALLY
+   UEF
+   VORONOI
+   VTK
++  USER-NEP-GPU
+   YAFF)
+@@ -582,6 +583,6 @@
+ foreach(PKG_WITH_INCL KSPACE PYTHON ML-IAP VORONOI COLVARS ML-HDNNP MDI MOLFILE NETCDF
+-        PLUMED QMMM ML-QUIP SCAFACOS MACHDYN VTK KIM COMPRESS ML-PACE LEPTON EXTRA-COMMAND)
++        PLUMED QMMM ML-QUIP SCAFACOS MACHDYN VTK KIM COMPRESS ML-PACE LEPTON EXTRA-COMMAND USER-NEP-GPU)
+  if(PKG_${PKG_WITH_INCL})
+    include(Packages/${PKG_WITH_INCL})
+  endif()
+ endforeach()

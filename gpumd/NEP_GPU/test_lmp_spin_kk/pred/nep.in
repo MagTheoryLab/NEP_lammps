@@ -1,0 +1,14 @@
+type 1 Fe
+cutoff 7 6
+spin_mode 2
+spin_feature 2 2 2 2  2 0 1 1
+lambda_e 1
+lambda_f 1
+lambda_m 1
+lambda_v 0.1   
+neuron 50
+generation 100000
+prediction 1
+batch 3000
+charge_mode 0
+output_descriptor 1

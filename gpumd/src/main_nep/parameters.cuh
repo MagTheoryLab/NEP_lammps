@@ -1,0 +1,211 @@
+/*
+    Copyright 2017 Zheyong Fan and GPUMD development team
+    This file is part of GPUMD.
+    GPUMD is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+    GPUMD is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+    You should have received a copy of the GNU General Public License
+    along with GPUMD.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#pragma once
+#include "utilities/gpu_vector.cuh"
+#include <string>
+#include <vector>
+
+class Parameters
+{
+public:
+  Parameters();
+
+  // parameters to be read in
+  int version;            // nep version, can be 3 or 4 or 5
+  int batch_size;         // number of configurations in one batch
+  int use_full_batch;     // 1 for effective full-batch even though batch_size is not full-batch
+  int num_types;          // number of atom types
+  int population_size;    // population size for SNES
+  int maximum_generation; // maximum number of generations for SNES;
+  int save_potential;     // number of generations between writing a checkpoint nep.txt file. 
+  int save_potential_format;   // format of checkpoint nep.txt file name
+  int save_potential_restart;  // if restart files should be written or not. 0=no, 1=yes
+  int num_neurons1;       // number of nuerons in the 1st hidden layer (only one hidden layer)
+  int basis_size_radial;  // for nep3
+  int basis_size_angular; // for nep3
+  int n_max_radial;       // maximum order of the radial Chebyshev polynomials
+  int n_max_angular;      // maximum order of the angular Chebyshev polynomials
+  int L_max;              // maximum order of the 3body spherical harmonics
+  int L_max_4body;        // maximum order of the 4body spherical harmonics
+  int L_max_5body;        // maximum order of the 5body spherical harmonics
+  float lambda_1;         // weight parameter for L1 regularization loss
+  float lambda_2;         // weight parameter for L2 regularization loss
+  float lambda_e;         // weight parameter for energy RMSE loss
+  float lambda_f;         // weight parameter for force RMSE loss
+  float lambda_v;         // weight parameter for virial RMSE loss
+  float lambda_shear;     // extra weight parameter for shear virial
+  float lambda_q;         // weight for global charge
+  float lambda_z;         // weight for BEC
+  float lambda_m;         // weight for magnetic force loss
+  float lambda_m_para;    // weight for longitudinal (para) magnetic force loss
+  float lambda_m_perp;    // weight for transverse (perp) magnetic force loss
+  float lambda_m_perp_angle; // weight for transverse mforce direction loss
+  float lambda_tau;       // weight for total spin-torque loss (tau_tot)
+  float force_delta;      // a parameters used to modify the force loss
+  bool enable_zbl;        // true for inlcuding the universal ZBL potential
+  bool flexible_zbl;      // true for inlcuding the flexible ZBL potential
+  float zbl_rc_inner;     // inner cutoff for the universal ZBL potential
+  float zbl_rc_outer;     // outer cutoff for the universal ZBL potential
+  int train_mode; // 0=potential, 1=dipole, 2=polarizability, 3=temperature-dependent free energy
+  int prediction; // 0=no, 1=yes
+  // spin controls
+  int spin_mode;  // 0=off, 1=enable spin descriptors + magnetic force
+  // On-site longitudinal descriptor order (p=1..spin_pmax). 0 disables.
+  int spin_pmax;
+  // On-site longitudinal basis mode:
+  // 0: legacy power basis m2^p, 1: Chebyshev on m2, 2: Chebyshev on |m|
+  int spin_onsite_basis_mode;
+  // Reference magnitude for mapping on-site variable to [-1,1] in Chebyshev basis.
+  // A single input value is broadcast to all types; expanded input stores per-type values here.
+  std::vector<float> spin_mref;
+  // Block 1: 2-body spin-radial basis.
+  int n_max_spin_radial;
+  int basis_size_spin_radial;
+  // Block 2: 3-body spin-angular basis.
+  int n_max_spin_angular;
+  int l_max_spin_angular;
+  int basis_size_spin_angular;
+  float initial_para;
+  float sigma0;
+  int atomic_v;
+  bool use_typewise_cutoff_zbl;
+  float typewise_cutoff_zbl_factor;
+  int output_descriptor;
+  // Optional GPU kernel timing (debug/profiling).
+  int kernel_timing;       // 0=off, 1=on
+  int kernel_timing_every; // sample/report every N find_force calls
+  int kernel_timing_skip;  // skip first N find_force calls (warmup)
+  int kernel_timing_topk;  // print top-K kernels by time
+  int charge_mode; // add dynamic charge to NEP potential model
+  bool has_bec = false; // check if there are target BEC values
+  int flip_charge = 0; // 1 for flipping charges upon restarting
+  int fine_tune = 0; // fine_tune option; 0=no, 1=yes
+  int fine_tune_descriptor = 1; // fine-tune descriptor; 0=no, 1=yes
+  std::string fine_tune_nep_txt = "";
+  std::string fine_tune_nep_restart = "";
+
+  // check if a parameter has been set:
+  bool is_train_mode_set;
+  bool is_prediction_set;
+  bool is_version_set;
+  bool is_type_set;
+  bool is_cutoff_set;
+  bool is_n_max_set;
+  bool is_basis_size_set;
+  bool is_l_max_set;
+  bool is_neuron_set;
+  bool is_lambda_1_set;
+  bool is_lambda_2_set;
+  bool is_lambda_e_set;
+  bool is_lambda_f_set;
+  bool is_lambda_v_set;
+  bool is_lambda_m_set;
+  bool is_lambda_m_para_set;
+  bool is_lambda_m_perp_set;
+  bool is_lambda_m_perp_angle_set;
+  bool is_lambda_tau_set;
+  bool is_atomic_v_set;
+  bool is_lambda_shear_set;
+  bool is_batch_set;
+  bool is_population_set;
+  bool is_generation_set;
+  bool is_save_potential_set;
+  bool is_type_weight_set;
+  bool is_force_delta_set;
+  bool is_zbl_set;
+  bool is_use_typewise_cutoff_zbl_set;
+  bool is_charge_mode_set;
+  bool is_spin_mode_set;
+  bool is_spin_onsite_set;
+  bool is_spin_2body_set;
+  bool is_spin_3body_set;
+
+  // other parameters
+  int dim;                            // dimension of the descriptor vector
+  int dim_radial;                     // number of radial descriptor components
+  int dim_angular;                    // number of angular descriptor components
+  int number_of_variables;            // total number of parameters (NN and descriptor)
+  int number_of_variables_ann;        // number of parameters in the ANN only
+  int number_of_variables_ann_1;      // number of parameters in the ANN for one element
+  int number_of_variables_descriptor; // number of parameters in the descriptor only
+
+  // some arrays
+
+  std::vector<float> type_weight_cpu; // relative force weight for different atom types (CPU)
+  std::vector<float> q_scaler_cpu;    // used to scale some descriptor components (CPU)
+  std::vector<std::string> elements;  // atom symbols
+  std::vector<int> atomic_numbers;    // atomic numbers
+  std::vector<float> zbl_para;        // parameters of zbl potential
+  std::vector<float> rc_radial;       // radial cutoff distance
+  std::vector<float> rc_angular;      // angular cutoff distance
+  float rc_radial_max = 0.0f;         // maximal radial cutoff
+  float rc_angular_max = 0.0f;        // maximal angular cutoff
+  bool has_multiple_cutoffs = false;
+
+  GPU_Vector<float> q_scaler_gpu[16]; // used to scale some descriptor components (GPU)
+
+private:
+  void set_default_parameters();
+  void read_nep_in();
+  void read_zbl_in();
+  void calculate_parameters();
+  void report_inputs();
+  void check_foundation_model();
+
+  void parse_one_keyword(std::vector<std::string>& tokens);
+
+  void parse_mode(const char** param, int num_param);
+  void parse_prediction(const char** param, int num_param);
+  void parse_version(const char** param, int num_param);
+  void parse_type(const char** param, int num_param);
+  void parse_type_weight(const char** param, int num_param);
+  void parse_zbl(const char** param, int num_param);
+  void parse_cutoff(const char** param, int num_param);
+  void parse_n_max(const char** param, int num_param);
+  void parse_basis_size(const char** param, int num_param);
+  void parse_l_max(const char** param, int num_param);
+  void parse_neuron(const char** param, int num_param);
+  void parse_lambda_1(const char** param, int num_param);
+  void parse_lambda_2(const char** param, int num_param);
+  void parse_lambda_e(const char** param, int num_param);
+  void parse_lambda_f(const char** param, int num_param);
+  void parse_lambda_v(const char** param, int num_param);
+  void parse_lambda_m(const char** param, int num_param);
+  void parse_lambda_m_para(const char** param, int num_param);
+  void parse_lambda_m_perp(const char** param, int num_param);
+  void parse_lambda_m_perp_angle(const char** param, int num_param);
+  void parse_lambda_tau(const char** param, int num_param);
+  void parse_lambda_q(const char** param, int num_param);
+  void parse_lambda_z(const char** param, int num_param);
+  void parse_lambda_shear(const char** param, int num_param);
+  void parse_force_delta(const char** param, int num_param);
+  void parse_batch(const char** param, int num_param);
+  void parse_population(const char** param, int num_param);
+  void parse_generation(const char** param, int num_param);
+  void parse_initial_para(const char** param, int num_param);
+  void parse_sigma0(const char** param, int num_param);
+  void parse_atomic_v(const char** param, int num_param);
+  void parse_use_typewise_cutoff_zbl(const char** param, int num_param);
+  void parse_output_descriptor(const char** param, int num_param);
+  void parse_kernel_timing(const char** param, int num_param);
+  void parse_charge_mode(const char** param, int num_param);
+  void parse_spin_mode(const char** param, int num_param);
+  void parse_spin_onsite(const char** param, int num_param);
+  void parse_spin_2body(const char** param, int num_param);
+  void parse_spin_3body(const char** param, int num_param);
+  void parse_fine_tune(const char** param, int num_param);
+  void parse_save_potential(const char** param, int num_param);
+};

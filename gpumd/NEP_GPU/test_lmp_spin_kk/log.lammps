@@ -1,0 +1,131 @@
+LAMMPS (29 Aug 2024 - Update 2)
+KOKKOS mode with Kokkos version 4.3.1 is enabled (src/KOKKOS/kokkos.cpp:72)
+  will use up to 1 GPU(s) per node
+  using 1 OpenMP thread(s) per MPI task
+package kokkos
+units           metal
+dimension       3
+boundary        p p p
+atom_style      spin/kk
+atom_modify     map array sort 0 0
+
+#replicate 2 2 2
+newton off
+package kokkos neigh full newton off
+comm_style brick
+
+
+read_data       conf.dat
+Reading data file ...
+  triclinic box = (0 0 0) to (7.099 7.099 7.099) with tilt (0 0 0)
+  1 by 1 by 2 MPI processor grid
+  reading atoms ...
+  32 atoms
+  read_data CPU = 0.025 seconds
+mass            1 55.845
+velocity        all create 10  123 dist gaussian   # 若 lattice=frozen 可省略
+run_style verlet/kk
+# 相互作用
+pair_style      nep/spin/gpu/kk   fm_units energy # 别名指向 GPU NEP 自旋实现
+pair_coeff      * * nep.txt Fe
+
+neighbor        1.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+timestep        0.0001
+group spingroup type 1
+32 atoms in group spingroup
+
+
+
+#fix 3 all langevin/spin 300.0   0.1 12345
+
+#fix 1 all nvt temp 300.0 300.0 0.1
+#
+# 3. 原子热浴 (控制晶格温度到 300K)
+#
+# 外磁场
+#fix fz spingroup precession/spin zeeman 1.0 0.0 0.0 1.0
+
+
+#fix f_lattice all nve
+#fix f_lang    all langevin 300.0 300.0 1 48279
+#fix f_npt  all npt temp 10.0 10.0 0.1 iso 0.0 0.0 1.0
+#fix 1 all nvt temp 50.0 50.0 0.1
+#fix 3 all langevin/spin 10.0   0.001 12345
+#fix 2 all nve/spin/sld lattice frozen gamma 1 alpha 0.1      lambda_long 0.1    verbose yes force_recompute yes
+#fix f_spin all nve/spin/sld lattice frozen gamma 1.0 alpha 0.0 lambda_long 0.0  spin_langevin 10.0 0.1 12345  verbose yes force_recompute yes
+#fix glsd all  spin/gsld lattice frozen gamma 1 glsd yes gammas 0.01  temp 10 seed 12345
+
+# 输出
+compute mag   all spin
+compute pe    all pe
+compute ke    all ke
+compute temp  all temp
+compute spin  all property/atom sp spx spy spz fmx fmy fmz fx fy fz
+#compute cspin_g all spin/glsd
+
+
+
+# 计算自旋相关量：[1-3]:磁化矢量, [4]:磁模长, [5]:磁能量, [6]:自旋温度
+
+variable magx    equal c_mag[1]
+variable magy    equal c_mag[2]
+variable magz    equal c_mag[3]
+variable magnorm equal c_mag[4]
+variable emag    equal c_mag[5]
+variable tmag    equal c_mag[6]
+
+thermo          100
+thermo_style    custom step time v_magnorm temp   vol v_tmag press etotal ke pe v_emag econserve
+thermo_modify   line one format float %10.10g
+
+dump            dpgen_dump all custom 10 traj.dump id type x y z c_spin[1] c_spin[2] c_spin[3] c_spin[4] c_spin[5] c_spin[6] c_spin[7] c_spin[8] c_spin[9] c_spin[10]
+dump_modify     dpgen_dump sort id
+dump_modify     dpgen_dump format float %10.8f
+
+run 0
+WARNING: No fixes with time integration, atoms won't move (src/verlet.cpp:60)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 8
+  ghost atom cutoff = 8
+  binsize = 8, bins = 1 1 1
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair nep/spin/gpu/kk, perpetual
+      attributes: full, newton off, kokkos_device
+      pair build: full/bin/kk/device
+      stencil: full/bin/3d
+      bin: kk/device
+Per MPI rank memory allocation (min/avg/max) = 5.386 | 5.386 | 5.386 Mbytes
+   Step          Time        v_magnorm         Temp          Volume         v_tmag         Press          TotEng         KinEng         PotEng         v_emag       Econserve   
+         0           0 0.04891529538         10 357.7597913 0.01113746193 -109664.5595 -273.0207919 0.04007064495 -273.0608625          0 -273.0207919
+Loop time of 0.00231705 on 2 procs for 0 steps with 32 atoms
+
+99.9% CPU use with 2 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 0.002317   |            |       |100.00
+
+Nlocal:             16 ave          17 max          15 min
+Histogram: 1 0 0 0 0 0 0 0 0 1
+Nghost:            914 ave         915 max         913 min
+Histogram: 1 0 0 0 0 0 0 0 0 1
+Neighs:              0 ave           0 max           0 min
+Histogram: 2 0 0 0 0 0 0 0 0 0
+FullNghs:         3181 ave        3381 max        2981 min
+Histogram: 1 0 0 0 0 0 0 0 0 1
+
+Total # of neighbors = 6362
+Ave neighs/atom = 198.8125
+Neighbor list builds = 0
+Dangerous builds = 0
+Total wall time: 0:00:00
