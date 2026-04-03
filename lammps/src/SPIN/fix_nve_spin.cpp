@@ -33,6 +33,7 @@
 #include "fix_precession_spin.h"
 #include "fix_setforce_spin.h"
 #include "force.h"
+#include "math_const.h"
 #include "memory.h"
 #include "modify.h"
 #include "pair_hybrid.h"
@@ -62,10 +63,10 @@ static const char cite_fix_nve_spin[] =
 
 FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg),
-  pair(nullptr), spin_pairs(nullptr), locklangevinspin(nullptr),
+  pair(nullptr), pair_nep(nullptr), spin_pairs(nullptr), locklangevinspin(nullptr),
   locksetforcespin(nullptr), lockprecessionspin(nullptr),
   rsec(nullptr), stack_head(nullptr), stack_foot(nullptr),
-  backward_stacks(nullptr), forward_stacks(nullptr)
+  backward_stacks(nullptr), forward_stacks(nullptr), f_backup(nullptr)
 {
   if (lmp->citeme) lmp->citeme->add(cite_fix_nve_spin);
 
@@ -116,6 +117,9 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   // initialize the magnetic interaction flags
 
   pair_spin_flag = 0;
+  nep_global_recompute_flag = 0;
+  hbar_local = 0.0;
+  nmax_backup = 0;
   long_spin_flag = 0;
   precession_spin_flag = 0;
   maglangevin_flag = 0;
@@ -128,6 +132,7 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
 FixNVESpin::~FixNVESpin()
 {
   memory->destroy(rsec);
+  memory->destroy(f_backup);
   memory->destroy(stack_head);
   memory->destroy(stack_foot);
   memory->destroy(forward_stacks);
@@ -158,6 +163,7 @@ void FixNVESpin::init()
   dtv = update->dt;
   dtf = 0.5 * update->dt * force->ftm2v;
   dts = 0.25 * update->dt;
+  hbar_local = force->hplanck / MathConst::MY_2PI;
   npairs = npairspin = 0;
 
   // set ptrs on Pair/Spin styles
@@ -207,9 +213,16 @@ void FixNVESpin::init()
   if (count1 != npairspin)
     error->all(FLERR,"Incorrect number of spin pair styles");
 
+  // optional bridge path: NEP spin pair styles do not expose PairSpin::compute_single_pair()
+  // If present, fallback to per-substep global pair compute and consume fm[i].
+  pair_nep = force->pair_match("^nep/spin/gpu",0);
+  if (!pair_nep) pair_nep = force->pair_match("^nep/spin/gpu/kk",0);
+  nep_global_recompute_flag = (pair_nep != nullptr);
+  if (nep_global_recompute_flag) pair_spin_flag = 0;
+
   // set pair/spin and long/spin flags
 
-  if (npairspin >= 1) pair_spin_flag = 1;
+  if (npairspin >= 1 && !nep_global_recompute_flag) pair_spin_flag = 1;
 
   for (int i = 0; i<npairs; i++) {
     if (force->pair_match("spin/long",0,i)) {
@@ -487,6 +500,41 @@ void FixNVESpin::pre_neighbor()
 }
 
 /* ----------------------------------------------------------------------
+   backup lattice forces before global NEP pair->compute() in spin substeps
+------------------------------------------------------------------------- */
+
+void FixNVESpin::backup_lattice_force()
+{
+  const int nall = atom->nlocal + atom->nghost;
+  if (nall > nmax_backup) {
+    nmax_backup = nall;
+    memory->grow(f_backup, nmax_backup, 3, "nve/spin:f_backup");
+  }
+
+  double **f = atom->f;
+  for (int i = 0; i < nall; i++) {
+    f_backup[i][0] = f[i][0];
+    f_backup[i][1] = f[i][1];
+    f_backup[i][2] = f[i][2];
+  }
+}
+
+/* ----------------------------------------------------------------------
+   restore lattice forces after global NEP pair->compute() in spin substeps
+------------------------------------------------------------------------- */
+
+void FixNVESpin::restore_lattice_force()
+{
+  const int nall = atom->nlocal + atom->nghost;
+  double **f = atom->f;
+  for (int i = 0; i < nall; i++) {
+    f[i][0] = f_backup[i][0];
+    f[i][1] = f_backup[i][1];
+    f[i][2] = f_backup[i][2];
+  }
+}
+
+/* ----------------------------------------------------------------------
    compute the magnetic torque for the spin ii
 ---------------------------------------------------------------------- */
 
@@ -504,6 +552,22 @@ void FixNVESpin::ComputeInteractionsSpin(int i)
   spi[2] = sp[i][2];
 
   fmi[0] = fmi[1] = fmi[2] = 0.0;
+
+  // bridge mode for NEP spin pair styles without PairSpin interface:
+  // recompute global pair fields at each substep and consume fm[i].
+  if (nep_global_recompute_flag) {
+    backup_lattice_force();
+    pair_nep->compute(0,0);
+    if (force->newton) comm->reverse_comm();
+
+    const double inv_hbar = (hbar_local > 0.0) ? (1.0 / hbar_local) : 0.0;
+    const double scale = sp[i][3] * 2.0 * inv_hbar;
+    fmi[0] += scale * fm[i][0];
+    fmi[1] += scale * fm[i][1];
+    fmi[2] += scale * fm[i][2];
+
+    restore_lattice_force();
+  }
 
   // update magnetic pair interactions
 

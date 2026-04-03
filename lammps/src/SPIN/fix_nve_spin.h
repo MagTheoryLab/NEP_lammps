@@ -43,6 +43,8 @@ class FixNVESpin : public Fix {
 
   void setup_pre_neighbor() override;
   void pre_neighbor() override;
+  void backup_lattice_force();
+  void restore_lattice_force();
 
   int lattice_flag;    // lattice_flag = 0 if spins only
                        // lattice_flag = 1 if spin-lattice calc.
@@ -66,6 +68,7 @@ class FixNVESpin : public Fix {
 
   int npairs, npairspin;    // # of pairs, and # of spin pairs
   class Pair *pair;
+  class Pair *pair_nep;
   class PairSpin **spin_pairs;    // vector of spin pairs
 
   // pointers to fix langevin/spin styles
@@ -87,6 +90,12 @@ class FixNVESpin : public Fix {
 
   int nsectors;
   double *rsec;
+
+  // optional bridge path for NEP spin pair styles without PairSpin interface
+  int nep_global_recompute_flag;
+  double hbar_local;
+  int nmax_backup;
+  double **f_backup;
 
   // stacking variables for sectoring algorithm
 
