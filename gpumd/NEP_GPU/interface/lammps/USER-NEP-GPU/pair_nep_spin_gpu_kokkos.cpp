@@ -206,7 +206,27 @@ template<class DeviceType>
 void PairNEPSpinGPUKokkos<DeviceType>::settings(int narg, char **arg)
 {
   if (narg == 0) return;
-  error->all(FLERR, "nep/spin/gpu/kk: pair_style does not accept settings; atom->fm always stores H = -dE/dM in eV/μB");
+  int iarg = 0;
+  while (iarg < narg) {
+    if (strcmp(arg[iarg], "iface") == 0) {
+      if (iarg + 3 > narg) error->all(FLERR, "nep/spin/gpu/kk: iface expects: iface <position> <half_width>");
+      iface_x_ = utils::numeric(FLERR, arg[iarg + 1], false, lmp);
+      iface_half_width_ = utils::numeric(FLERR, arg[iarg + 2], false, lmp);
+      iarg += 3;
+    } else {
+      error->all(FLERR, "Illegal pair_style command for nep/spin/gpu/kk");
+    }
+  }
+}
+
+template<class DeviceType>
+void *PairNEPSpinGPUKokkos<DeviceType>::extract(const char *name, int &dim)
+{
+  dim = 1;
+  if (strcmp(name, "fm_left_iface_ptr") == 0) return fm_left_iface_host_.data();
+  if (strcmp(name, "iface_x_ptr") == 0) return &iface_x_;
+  if (strcmp(name, "iface_half_width_ptr") == 0) return &iface_half_width_;
+  return nullptr;
 }
 
 template<class DeviceType>
@@ -633,6 +653,13 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
     Kokkos::deep_copy(exec, d_fm_aos, 0.0);
     res.fm = (double *) d_fm_aos.data();
   }
+  if (d_fm_left_iface_aos.extent_int(0) != 3 * nall) {
+    d_fm_left_iface_aos = Kokkos::View<double*, DeviceType>(Kokkos::NoInit("nep_spin_gpu:fm_left_iface_aos"), 3 * nall);
+  }
+  Kokkos::deep_copy(exec, d_fm_left_iface_aos, 0.0);
+  res.fm_left_iface = (double *) d_fm_left_iface_aos.data();
+  res.iface_x = iface_x_;
+  res.iface_half_width = iface_half_width_;
   res.want_virial_raw9 = false;
   // Convention: spin magnitude is magnetic moment M in μB, and NEP outputs field = -dE/dM in eV/μB.
   res.inv_hbar = 1.0;
@@ -737,6 +764,13 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
         for (int k = 0; k < 9; ++k) cvatom[i][k] += h_v(idx + k);
       }
     }
+  }
+
+  {
+    auto h_fm_left = Kokkos::create_mirror_view(d_fm_left_iface_aos);
+    Kokkos::deep_copy(h_fm_left, d_fm_left_iface_aos);
+    fm_left_iface_host_.resize(3 * nall);
+    for (int i = 0; i < 3 * nall; ++i) fm_left_iface_host_[i] = h_fm_left(i);
   }
 }
 
