@@ -33,6 +33,7 @@
 #include "fix_precession_spin.h"
 #include "fix_setforce_spin.h"
 #include "force.h"
+#include "group.h"
 #include "math_const.h"
 #include "memory.h"
 #include "modify.h"
