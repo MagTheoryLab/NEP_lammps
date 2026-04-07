@@ -857,6 +857,12 @@ void FixNVESpin::sectoring()
     rv = MAX(rv,cutoff);
   }
 
+  // NEP bridge mode can run without PairSpin styles.
+  // In that case, use pair_nep->cutforce as sectoring cutoff.
+  if ((rv == 0.0) && nep_global_recompute_flag && pair_nep) {
+    rv = pair_nep->cutforce;
+  }
+
   if (rv == 0.0)
    error->all(FLERR, Error::NOLASTLINE,
               "No suitable cutoff found for sectoring operation: rv = {}", rv);
