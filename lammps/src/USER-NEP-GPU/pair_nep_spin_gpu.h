@@ -39,7 +39,8 @@ class PairNEPSpinGPU : public Pair {
   void settings(int, char **) override;
   void coeff(int, char **) override;
   double init_one(int, int) override;
- void init_style() override;
+  void init_style() override;
+  void *extract(const char *, int &) override;
 
  private:
   // The backend returns mforce = -dE/dM in eV/mu_B and we expose that directly.
@@ -56,8 +57,12 @@ class PairNEPSpinGPU : public Pair {
   std::vector<double> sp4_host_;
   std::vector<double> f_host_;
   std::vector<double> fm_host_;
+  std::vector<double> fm_left_iface_host_;
   std::vector<double> eatom_host_;
   std::vector<double> vatom_host_;
+
+  double iface_x_{0.0};
+  double iface_half_width_{0.0};
 
   // Neighbor lists: compact stride = nlocal, index = i + nlocal*slot
   std::vector<int> nn_radial_;

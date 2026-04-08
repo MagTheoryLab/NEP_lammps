@@ -34,6 +34,7 @@ PairStyle(nep/spin/gpu/kk/device,PairNEPSpinGPUKokkos<LMPDeviceType>);
 
 #include <string>
 #include <type_traits>
+#include <vector>
 
 class NepGpuLammpsModel;
 
@@ -50,6 +51,7 @@ class PairNEPSpinGPUKokkos : public Pair {
   void coeff(int, char **) override;
   double init_one(int, int) override;
   void init_style() override;
+  void *extract(const char *, int &) override;
 
  private:
   typedef ArrayTypes<DeviceType> AT;
@@ -92,6 +94,10 @@ class PairNEPSpinGPUKokkos : public Pair {
   // When layout is not AoS, compute into these temporary AoS buffers and scatter-add.
   Kokkos::View<double*, DeviceType> d_f_aos;  // length 3*nall (optional)
   Kokkos::View<double*, DeviceType> d_fm_aos; // length 3*nall (optional)
+  Kokkos::View<double*, DeviceType> d_fm_left_iface_aos; // length 3*nall (optional analysis)
+  std::vector<double> fm_left_iface_host_;
+  double iface_x_{0.0};
+  double iface_half_width_{0.0};
 
   int cached_ntypes{0};
   int cached_mn_r{0};

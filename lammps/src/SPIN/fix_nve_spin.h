@@ -36,13 +36,18 @@ class FixNVESpin : public Fix {
   void final_integrate() override;
 
   void ComputeInteractionsSpin(int);    // compute and advance single spin functions
+  void ComputeInteractionsSpin(int, double *);
+  void ComputeInteractionsSpinOneSide(int, double *);
   void AdvanceSingleSpin(int);
+  void AdvanceSingleSpinPredict(int, const double *, double *);
 
   void sectoring();    // sectoring operation functions
   int coords2sector(double *);
 
   void setup_pre_neighbor() override;
   void pre_neighbor() override;
+  void backup_lattice_force();
+  void restore_lattice_force();
 
   int lattice_flag;    // lattice_flag = 0 if spins only
                        // lattice_flag = 1 if spin-lattice calc.
@@ -66,6 +71,7 @@ class FixNVESpin : public Fix {
 
   int npairs, npairspin;    // # of pairs, and # of spin pairs
   class Pair *pair;
+  class Pair *pair_nep;
   class PairSpin **spin_pairs;    // vector of spin pairs
 
   // pointers to fix langevin/spin styles
@@ -87,6 +93,25 @@ class FixNVESpin : public Fix {
 
   int nsectors;
   double *rsec;
+
+  // optional bridge path for NEP spin pair styles without PairSpin interface
+  int nep_global_recompute_flag;
+  double hbar_local;
+  int nmax_backup;
+  double **f_backup;
+  double *nep_fm_left_iface;
+
+  // optional energy-tracking instrumentation
+  int energy_track_flag;
+  int energy_track_every;
+  int iface_axis;
+  double iface_pos;
+  double iface_half_width;
+  int iface_enable;
+  char *energy_group_file;
+  char *energy_iface_file;
+  double *group_sums_local;
+  double *group_sums_global;
 
   // stacking variables for sectoring algorithm
 
