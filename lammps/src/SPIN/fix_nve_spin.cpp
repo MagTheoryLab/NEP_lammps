@@ -429,7 +429,7 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
   };
 
   auto advance_spin_plain = [&](int i) {
-    ComputeInteractionsSpin(i);
+    ComputeInteractionsSpin(i, nullptr);
     AdvanceSingleSpin(i);
   };
 
@@ -644,24 +644,6 @@ void FixNVESpin::pre_neighbor()
     }
   }
 
-}
-
-/* ----------------------------------------------------------------------
-   compute the magnetic torque for the spin ii
----------------------------------------------------------------------- */
-
-void FixNVESpin::ComputeInteractionsSpin(int i)
-{
-  ComputeInteractionsSpin(i, nullptr);
-}
-
-/* ----------------------------------------------------------------------
-   compute magnetic torque for spin i and optionally store pair-only channel
----------------------------------------------------------------------- */
-
-void FixNVESpin::ComputeInteractionsSpin(int i, double *fmi_pairs)
-{
-  ComputeInteractionsSpin(i, nullptr);
 }
 
 /* ----------------------------------------------------------------------

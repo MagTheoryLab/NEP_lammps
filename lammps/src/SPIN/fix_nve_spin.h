@@ -35,7 +35,6 @@ class FixNVESpin : public Fix {
   void initial_integrate(int) override;
   void final_integrate() override;
 
-  void ComputeInteractionsSpin(int);    // compute and advance single spin functions
   void ComputeInteractionsSpin(int, double *);
   void ComputeInteractionsSpinOneSide(int, double *);
   void AdvanceSingleSpin(int);
