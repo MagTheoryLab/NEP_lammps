@@ -69,7 +69,7 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   pair(nullptr), pair_nep(nullptr), spin_pairs(nullptr), locklangevinspin(nullptr),
   locksetforcespin(nullptr), lockprecessionspin(nullptr),
   rsec(nullptr), stack_head(nullptr), stack_foot(nullptr),
-  backward_stacks(nullptr), forward_stacks(nullptr), f_backup(nullptr)
+  backward_stacks(nullptr), forward_stacks(nullptr)
 {
   if (lmp->citeme) lmp->citeme->add(cite_fix_nve_spin);
 
@@ -80,7 +80,6 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   nlocal_max = 0;
   npairs = 0;
   npairspin = 0;
-  nep_fm_left_iface = nullptr;
   group_sums_local = group_sums_global = nullptr;
   energy_group_file = nullptr;
   energy_iface_file = nullptr;
@@ -170,7 +169,8 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
   pair_spin_flag = 0;
   nep_global_recompute_flag = 0;
   hbar_local = 0.0;
-  nmax_backup = 0;
+  nep_compute_single_pair = nullptr;
+  nep_compute_single_pair_one_side = nullptr;
   long_spin_flag = 0;
   precession_spin_flag = 0;
   maglangevin_flag = 0;
@@ -183,7 +183,6 @@ FixNVESpin::FixNVESpin(LAMMPS *lmp, int narg, char **arg) :
 FixNVESpin::~FixNVESpin()
 {
   memory->destroy(rsec);
-  memory->destroy(f_backup);
   memory->destroy(stack_head);
   memory->destroy(stack_foot);
   memory->destroy(forward_stacks);
@@ -273,7 +272,6 @@ void FixNVESpin::init()
   pair_nep = force->pair_match("^nep/spin/gpu",0);
   if (!pair_nep) pair_nep = force->pair_match("^nep/spin/gpu/kk",0);
   nep_global_recompute_flag = (pair_nep != nullptr);
-  nep_fm_left_iface = nullptr;
   if (nep_global_recompute_flag) {
     int dim = 0;
     auto *iface_x_ptr = reinterpret_cast<double *>(pair_nep->extract("iface_x_ptr", dim));
@@ -286,7 +284,12 @@ void FixNVESpin::init()
         *iface_hw_ptr = iface_half_width;
       }
     }
-    nep_fm_left_iface = reinterpret_cast<double *>(pair_nep->extract("fm_left_iface_ptr", dim));
+    nep_compute_single_pair = reinterpret_cast<nep_spin_single_fn_t>(
+      pair_nep->extract("compute_single_pair_fn", dim));
+    nep_compute_single_pair_one_side = reinterpret_cast<nep_spin_single_fn_t>(
+      pair_nep->extract("compute_single_pair_one_side_fn", dim));
+    if (!nep_compute_single_pair || !nep_compute_single_pair_one_side)
+      error->all(FLERR, "fix nve/spin requires NEP pair style with compute_single_pair interfaces");
   }
   if (nep_global_recompute_flag) pair_spin_flag = 0;
 
@@ -430,16 +433,6 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     AdvanceSingleSpin(i);
   };
 
-  auto refresh_nep_fields = [&]() {
-    if (!nep_global_recompute_flag) return;
-    backup_lattice_force();
-    pair_nep->compute(0,0);
-    if (force->newton) comm->reverse_comm();
-    int dim = 0;
-    nep_fm_left_iface = reinterpret_cast<double *>(pair_nep->extract("fm_left_iface_ptr", dim));
-    restore_lattice_force();
-  };
-
   auto advance_spin_track = [&](int i) {
     double fmi_full[3] = {0.0, 0.0, 0.0};
     double fmi_left[3] = {0.0, 0.0, 0.0};
@@ -491,7 +484,6 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
   if (sector_flag) {                            // sectoring seq. update
     for (int j = 0; j < nsectors; j++) {        // advance quarter s for nlocal
       comm->forward_comm();
-      refresh_nep_fields();
       int i = stack_foot[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
@@ -503,7 +495,6 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     }
     for (int j = nsectors-1; j >= 0; j--) {     // advance quarter s for nlocal
       comm->forward_comm();
-      refresh_nep_fields();
       int i = stack_head[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
@@ -515,14 +506,12 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     }
   } else {                                       // serial seq. update
     comm->forward_comm();                        // comm. positions of ghost atoms
-    refresh_nep_fields();
     for (int i = 0; i < nlocal; i++) {           // advance quarter s for nlocal
       if (mask[i] & groupbit) {
         if (do_track) advance_spin_track(i);
         else advance_spin_plain(i);
       }
     }
-    refresh_nep_fields();
     for (int i = nlocal-1; i >= 0; i--) {        // advance quarter s for nlocal
       if (mask[i] & groupbit) {
         if (do_track) advance_spin_track(i);
@@ -548,7 +537,6 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
   if (sector_flag) {                            // sectoring seq. update
     for (int j = 0; j < nsectors; j++) {        // advance quarter s for nlocal
       comm->forward_comm();
-      refresh_nep_fields();
       int i = stack_foot[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
@@ -560,7 +548,6 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     }
     for (int j = nsectors-1; j >= 0; j--) {     // advance quarter s for nlocal
       comm->forward_comm();
-      refresh_nep_fields();
       int i = stack_head[j];
       while (i >= 0) {
         if (mask[i] & groupbit) {
@@ -572,14 +559,12 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     }
   } else {                                      // serial seq. update
     comm->forward_comm();                       // comm. positions of ghost atoms
-    refresh_nep_fields();
     for (int i = 0; i < nlocal; i++) {          // advance quarter s for nlocal-1
       if (mask[i] & groupbit) {
         if (do_track) advance_spin_track(i);
         else advance_spin_plain(i);
       }
     }
-    refresh_nep_fields();
     for (int i = nlocal-1; i >= 0; i--) {       // advance quarter s for nlocal-1
       if (mask[i] & groupbit) {
         if (do_track) advance_spin_track(i);
@@ -662,41 +647,6 @@ void FixNVESpin::pre_neighbor()
 }
 
 /* ----------------------------------------------------------------------
-   backup lattice forces before global NEP pair->compute() in spin substeps
-------------------------------------------------------------------------- */
-
-void FixNVESpin::backup_lattice_force()
-{
-  const int nall = atom->nlocal + atom->nghost;
-  if (nall > nmax_backup) {
-    nmax_backup = nall;
-    memory->grow(f_backup, nmax_backup, 3, "nve/spin:f_backup");
-  }
-
-  double **f = atom->f;
-  for (int i = 0; i < nall; i++) {
-    f_backup[i][0] = f[i][0];
-    f_backup[i][1] = f[i][1];
-    f_backup[i][2] = f[i][2];
-  }
-}
-
-/* ----------------------------------------------------------------------
-   restore lattice forces after global NEP pair->compute() in spin substeps
-------------------------------------------------------------------------- */
-
-void FixNVESpin::restore_lattice_force()
-{
-  const int nall = atom->nlocal + atom->nghost;
-  double **f = atom->f;
-  for (int i = 0; i < nall; i++) {
-    f[i][0] = f_backup[i][0];
-    f[i][1] = f_backup[i][1];
-    f[i][2] = f_backup[i][2];
-  }
-}
-
-/* ----------------------------------------------------------------------
    compute the magnetic torque for the spin ii
 ---------------------------------------------------------------------- */
 
@@ -724,14 +674,10 @@ void FixNVESpin::ComputeInteractionsSpin(int i, double *fmi_pairs)
 
   fmi[0] = fmi[1] = fmi[2] = 0.0;
 
-  // bridge mode for NEP spin pair styles without PairSpin interface:
-  // consume precomputed global pair fields from atom->fm.
+  // bridge mode for NEP spin pair styles:
+  // consume pair-style single-spin channel without global pair recompute.
   if (nep_global_recompute_flag) {
-    const double inv_hbar = (hbar_local > 0.0) ? (1.0 / hbar_local) : 0.0;
-    const double scale = sp[i][3] * 2.0 * inv_hbar;
-    fmi[0] += scale * fm[i][0];
-    fmi[1] += scale * fm[i][1];
-    fmi[2] += scale * fm[i][2];
+    nep_compute_single_pair(pair_nep, i, fmi);
   }
 
   // update magnetic pair interactions
@@ -784,7 +730,6 @@ void FixNVESpin::ComputeInteractionsSpinOneSide(int i, double *fmi_one_side)
 {
   double spi[3], fmi[3];
   double **sp = atom->sp;
-  double **fm = atom->fm;
 
   spi[0] = sp[i][0];
   spi[1] = sp[i][1];
@@ -792,17 +737,7 @@ void FixNVESpin::ComputeInteractionsSpinOneSide(int i, double *fmi_one_side)
   fmi[0] = fmi[1] = fmi[2] = 0.0;
 
   if (nep_global_recompute_flag) {
-    const double inv_hbar = (hbar_local > 0.0) ? (1.0 / hbar_local) : 0.0;
-    const double scale = sp[i][3] * 2.0 * inv_hbar;
-    if (nep_fm_left_iface) {
-      fmi[0] += scale * nep_fm_left_iface[3*i+0];
-      fmi[1] += scale * nep_fm_left_iface[3*i+1];
-      fmi[2] += scale * nep_fm_left_iface[3*i+2];
-    } else {
-      fmi[0] += scale * fm[i][0];
-      fmi[1] += scale * fm[i][1];
-      fmi[2] += scale * fm[i][2];
-    }
+    nep_compute_single_pair_one_side(pair_nep, i, fmi);
   } else if (pair_spin_flag) {
     for (int k = 0; k < npairspin; k++) spin_pairs[k]->compute_single_pair(i, fmi);
   }

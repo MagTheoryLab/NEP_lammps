@@ -52,6 +52,8 @@ class PairNEPSpinGPUKokkos : public Pair {
   double init_one(int, int) override;
   void init_style() override;
   void *extract(const char *, int &) override;
+  void compute_single_pair(int, double *);
+  void compute_single_pair_one_side(int, double *);
 
  private:
   typedef ArrayTypes<DeviceType> AT;
