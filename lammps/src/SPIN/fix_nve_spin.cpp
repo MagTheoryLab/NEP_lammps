@@ -661,6 +661,15 @@ void FixNVESpin::ComputeInteractionsSpin(int i)
 
 void FixNVESpin::ComputeInteractionsSpin(int i, double *fmi_pairs)
 {
+  ComputeInteractionsSpin(i, nullptr);
+}
+
+/* ----------------------------------------------------------------------
+   compute magnetic torque for spin i and optionally store pair-only channel
+---------------------------------------------------------------------- */
+
+void FixNVESpin::ComputeInteractionsSpin(int i, double *fmi_pairs)
+{
   double spi[3], fmi[3];
 
   double **sp = atom->sp;
