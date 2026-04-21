@@ -36,7 +36,10 @@ class FixNVESpin : public Fix {
   void final_integrate() override;
 
   void ComputeInteractionsSpin(int);    // compute and advance single spin functions
+  void ComputeInteractionsSpin(int, double *);
+  void ComputeInteractionsSpinOneSide(int, double *);
   void AdvanceSingleSpin(int);
+  void AdvanceSingleSpinPredict(int, const double *, double *);
 
   void sectoring();    // sectoring operation functions
   int coords2sector(double *);
@@ -96,6 +99,19 @@ class FixNVESpin : public Fix {
   double hbar_local;
   int nmax_backup;
   double **f_backup;
+  double *nep_fm_left_iface;
+
+  // optional energy-tracking instrumentation
+  int energy_track_flag;
+  int energy_track_every;
+  int iface_axis;
+  double iface_pos;
+  double iface_half_width;
+  int iface_enable;
+  char *energy_group_file;
+  char *energy_iface_file;
+  double *group_sums_local;
+  double *group_sums_global;
 
   // stacking variables for sectoring algorithm
 
