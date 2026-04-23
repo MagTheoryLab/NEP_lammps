@@ -707,11 +707,11 @@ void FixNVESpin::ComputeInteractionsSpin(int i, double *fmi_pairs)
   }
 
   // return the effective torque used for spin advance (after all channels)
-  if (fmi_pairs) {
-    fmi_pairs[0] = fmi[0];
-    fmi_pairs[1] = fmi[1];
-    fmi_pairs[2] = fmi[2];
-  }
+  // if (fmi_pairs) {
+  //   fmi_pairs[0] = fmi[0];
+  //   fmi_pairs[1] = fmi[1];
+  //   fmi_pairs[2] = fmi[2];
+  // }
 
   // replace the magnetic force fm[i] by its new value fmi
 
