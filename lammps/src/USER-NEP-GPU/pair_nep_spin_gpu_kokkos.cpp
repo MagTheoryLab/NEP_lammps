@@ -252,13 +252,19 @@ void *PairNEPSpinGPUKokkos<DeviceType>::extract(const char *name, int &dim)
 template<class DeviceType>
 void PairNEPSpinGPUKokkos<DeviceType>::compute_single_pair(int i, double *fmi)
 {
-  if (!fmi || !atom || !atom->fm || !atom->sp) return;
+  if (!fmi || !atom || !atom->sp) return;
   if (i < 0 || i >= atom->nlocal) return;
   const double inv_hbar = (force->hplanck > 0.0) ? (MathConst::MY_2PI / force->hplanck) : 0.0;
   const double scale = atom->sp[i][3] * 2.0 * inv_hbar;
-  fmi[0] += scale * atom->fm[i][0];
-  fmi[1] += scale * atom->fm[i][1];
-  fmi[2] += scale * atom->fm[i][2];
+  if (static_cast<size_t>(3 * i + 2) < fm_pair_snapshot_host_.size()) {
+    fmi[0] += scale * fm_pair_snapshot_host_[3 * i + 0];
+    fmi[1] += scale * fm_pair_snapshot_host_[3 * i + 1];
+    fmi[2] += scale * fm_pair_snapshot_host_[3 * i + 2];
+  } else if (atom->fm) {
+    fmi[0] += scale * atom->fm[i][0];
+    fmi[1] += scale * atom->fm[i][1];
+    fmi[2] += scale * atom->fm[i][2];
+  }
 }
 
 template<class DeviceType>
@@ -817,10 +823,18 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
   }
 
   {
+    const int nall3 = 3 * nall;
+    fm_pair_snapshot_host_.resize(nall3);
+    for (int i = 0; i < nall; ++i) {
+      fm_pair_snapshot_host_[3 * i + 0] = atom->fm[i][0];
+      fm_pair_snapshot_host_[3 * i + 1] = atom->fm[i][1];
+      fm_pair_snapshot_host_[3 * i + 2] = atom->fm[i][2];
+    }
+
     auto h_fm_left = Kokkos::create_mirror_view(d_fm_left_iface_aos);
     Kokkos::deep_copy(h_fm_left, d_fm_left_iface_aos);
-    fm_left_iface_host_.resize(3 * nall);
-    for (int i = 0; i < 3 * nall; ++i) fm_left_iface_host_[i] = h_fm_left(i);
+    fm_left_iface_host_.resize(nall3);
+    for (int i = 0; i < nall3; ++i) fm_left_iface_host_[i] = h_fm_left(i);
   }
 }
 

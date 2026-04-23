@@ -678,6 +678,12 @@ void FixNVESpin::ComputeInteractionsSpin(int i, double *fmi_pairs)
       spin_pairs[k]->compute_single_pair(i,fmi);
     }
   }
+  if (fmi_pairs) {
+    fmi_pairs[0] = fmi[0];
+    fmi_pairs[1] = fmi[1];
+    fmi_pairs[2] = fmi[2];
+  }
+
   // update magnetic precession interactions
 
   if (precession_spin_flag) {

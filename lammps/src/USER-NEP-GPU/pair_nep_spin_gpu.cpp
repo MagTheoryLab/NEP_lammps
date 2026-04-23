@@ -265,13 +265,19 @@ void *PairNEPSpinGPU::extract(const char *name, int &dim)
 
 void PairNEPSpinGPU::compute_single_pair(int i, double *fmi)
 {
-  if (!fmi || !atom || !atom->fm || !atom->sp) return;
+  if (!fmi || !atom || !atom->sp) return;
   if (i < 0 || i >= atom->nlocal) return;
   const double inv_hbar = (force->hplanck > 0.0) ? (MathConst::MY_2PI / force->hplanck) : 0.0;
   const double scale = atom->sp[i][3] * 2.0 * inv_hbar;
-  fmi[0] += scale * atom->fm[i][0];
-  fmi[1] += scale * atom->fm[i][1];
-  fmi[2] += scale * atom->fm[i][2];
+  if (static_cast<size_t>(3 * i + 2) < fm_pair_snapshot_host_.size()) {
+    fmi[0] += scale * fm_pair_snapshot_host_[3 * i + 0];
+    fmi[1] += scale * fm_pair_snapshot_host_[3 * i + 1];
+    fmi[2] += scale * fm_pair_snapshot_host_[3 * i + 2];
+  } else if (atom->fm) {
+    fmi[0] += scale * atom->fm[i][0];
+    fmi[1] += scale * atom->fm[i][1];
+    fmi[2] += scale * atom->fm[i][2];
+  }
 }
 
 void PairNEPSpinGPU::compute_single_pair_one_side(int i, double *fmi)
@@ -512,6 +518,7 @@ void PairNEPSpinGPU::compute(int eflag_in, int vflag_in)
   sp4_host_.resize(4 * natoms_total);
   f_host_.resize(3 * natoms_total);
   fm_host_.resize(3 * natoms_total);
+  fm_pair_snapshot_host_.resize(3 * natoms_total);
   fm_left_iface_host_.resize(3 * natoms_total);
   // Defensive: the NEP spin backend may accumulate into the provided output buffers
   // (e.g., using atomic adds).  When std::vector is resized without reallocation,
@@ -520,6 +527,8 @@ void PairNEPSpinGPU::compute(int eflag_in, int vflag_in)
   // atoms and rely on LAMMPS reverse_comm to move ghost contributions to owners.
   if (!f_host_.empty()) std::memset(f_host_.data(), 0, sizeof(double) * f_host_.size());
   if (!fm_host_.empty()) std::memset(fm_host_.data(), 0, sizeof(double) * fm_host_.size());
+  if (!fm_pair_snapshot_host_.empty())
+    std::memset(fm_pair_snapshot_host_.data(), 0, sizeof(double) * fm_pair_snapshot_host_.size());
   if (!fm_left_iface_host_.empty()) std::memset(fm_left_iface_host_.data(), 0, sizeof(double) * fm_left_iface_host_.size());
 
   nn_radial_.assign(nlocal, 0);
@@ -815,6 +824,10 @@ void PairNEPSpinGPU::compute(int eflag_in, int vflag_in)
     atom->fm[old][0] += res.fm[3 * neu + 0];
     atom->fm[old][1] += res.fm[3 * neu + 1];
     atom->fm[old][2] += res.fm[3 * neu + 2];
+
+    fm_pair_snapshot_host_[3 * old + 0] = res.fm[3 * neu + 0];
+    fm_pair_snapshot_host_[3 * old + 1] = res.fm[3 * neu + 1];
+    fm_pair_snapshot_host_[3 * old + 2] = res.fm[3 * neu + 2];
   }
 
   if (eflag_in) {

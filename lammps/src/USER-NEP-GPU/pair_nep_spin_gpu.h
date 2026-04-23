@@ -59,6 +59,7 @@ class PairNEPSpinGPU : public Pair {
   std::vector<double> sp4_host_;
   std::vector<double> f_host_;
   std::vector<double> fm_host_;
+  std::vector<double> fm_pair_snapshot_host_;
   std::vector<double> fm_left_iface_host_;
   std::vector<double> eatom_host_;
   std::vector<double> vatom_host_;
