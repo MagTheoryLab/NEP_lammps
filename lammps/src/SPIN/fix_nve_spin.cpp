@@ -444,11 +444,11 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
     const bool on_iface = in_interface(i);
     if (on_iface) {
       ComputeInteractionsSpinOneSide(i, fmi_left);
-      AdvanceSingleSpinPredict(i, fmi_left, &e_left_before);
+      AdvanceSingleSpinNoLangevin(i, fmi_left, &e_left_before);
     }
 
     ComputeInteractionsSpin(i, fmi_full);
-    AdvanceSingleSpinPredict(i, fmi_full, &e_no_langevin);
+    AdvanceSingleSpinNoLangevin(i, fmi_full, &e_no_langevin);
     AdvanceSingleSpin(i);
 
     e_single = (sp[i][0] * fmi_full[0]) + (sp[i][1] * fmi_full[1]) + (sp[i][2] * fmi_full[2]);
@@ -456,7 +456,7 @@ void FixNVESpin::initial_integrate(int /*vflag*/)
 
     if (on_iface) {
       ComputeInteractionsSpinOneSide(i, fmi_left);
-      AdvanceSingleSpinPredict(i, fmi_left, &e_left_after);
+      AdvanceSingleSpinNoLangevin(i, fmi_left, &e_left_after);
       energy_diff_one_side_local += (e_left_after - e_left_before) * hbar_local;
     }
 
@@ -949,6 +949,16 @@ void FixNVESpin::AdvanceSingleSpinPredict(int i, const double *fmi, double *ener
   g[2] /= (1.0 + 0.25*fm2*dts2);
 
   *energy_out = (g[0]*fmi[0]) + (g[1]*fmi[1]) + (g[2]*fmi[2]);
+}
+
+/* ----------------------------------------------------------------------
+   SWD-equivalent no_langevin predictor under supplied torque
+---------------------------------------------------------------------- */
+
+void FixNVESpin::AdvanceSingleSpinNoLangevin(int i, const double *fmi, double *energy_out)
+{
+  // Keep the same discrete update formula as SWD no_langevin predictor.
+  AdvanceSingleSpinPredict(i, fmi, energy_out);
 }
 
 /* ---------------------------------------------------------------------- */

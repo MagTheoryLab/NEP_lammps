@@ -38,6 +38,7 @@ class FixNVESpin : public Fix {
   void ComputeInteractionsSpin(int, double *);
   void ComputeInteractionsSpinOneSide(int, double *);
   void AdvanceSingleSpin(int);
+  void AdvanceSingleSpinNoLangevin(int, const double *, double *);
   void AdvanceSingleSpinPredict(int, const double *, double *);
 
   void sectoring();    // sectoring operation functions
