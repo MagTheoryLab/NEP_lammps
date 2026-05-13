@@ -95,6 +95,22 @@ struct NepSpinKokkosForceAosTraits {
   static constexpr bool is_double = std::is_same<value_type, double>::value;
   static constexpr bool direct_ok = is_layout_right && is_double;
 };
+
+using NepSpinSingleFn = void (*)(Pair *, int, double *);
+
+template<class DeviceType>
+void nep_spin_compute_single_pair_bridge(Pair *pair, int i, double *fmi)
+{
+  auto *self = static_cast<PairNEPSpinGPUKokkos<DeviceType> *>(pair);
+  self->compute_single_pair(i, fmi);
+}
+
+template<class DeviceType>
+void nep_spin_compute_single_pair_one_side_bridge(Pair *pair, int i, double *fmi)
+{
+  auto *self = static_cast<PairNEPSpinGPUKokkos<DeviceType> *>(pair);
+  self->compute_single_pair_one_side(i, fmi);
+}
 } // namespace
 
 template<class DeviceType>
@@ -206,7 +222,67 @@ template<class DeviceType>
 void PairNEPSpinGPUKokkos<DeviceType>::settings(int narg, char **arg)
 {
   if (narg == 0) return;
-  error->all(FLERR, "nep/spin/gpu/kk: pair_style does not accept settings; atom->fm always stores H = -dE/dM in eV/μB");
+  int iarg = 0;
+  while (iarg < narg) {
+    if (strcmp(arg[iarg], "iface") == 0) {
+      if (iarg + 3 > narg) error->all(FLERR, "nep/spin/gpu/kk: iface expects: iface <position> <half_width>");
+      iface_x_ = utils::numeric(FLERR, arg[iarg + 1], false, lmp);
+      iface_half_width_ = utils::numeric(FLERR, arg[iarg + 2], false, lmp);
+      iarg += 3;
+    } else {
+      error->all(FLERR, "Illegal pair_style command for nep/spin/gpu/kk");
+    }
+  }
+}
+
+template<class DeviceType>
+void *PairNEPSpinGPUKokkos<DeviceType>::extract(const char *name, int &dim)
+{
+  dim = 1;
+  if (strcmp(name, "fm_left_iface_ptr") == 0) return fm_left_iface_host_.data();
+  if (strcmp(name, "iface_x_ptr") == 0) return &iface_x_;
+  if (strcmp(name, "iface_half_width_ptr") == 0) return &iface_half_width_;
+  if (strcmp(name, "compute_single_pair_fn") == 0)
+    return reinterpret_cast<void *>(static_cast<NepSpinSingleFn>(nep_spin_compute_single_pair_bridge<DeviceType>));
+  if (strcmp(name, "compute_single_pair_one_side_fn") == 0)
+    return reinterpret_cast<void *>(static_cast<NepSpinSingleFn>(nep_spin_compute_single_pair_one_side_bridge<DeviceType>));
+  return nullptr;
+}
+
+template<class DeviceType>
+void PairNEPSpinGPUKokkos<DeviceType>::compute_single_pair(int i, double *fmi)
+{
+  if (!fmi || !atom || !atom->sp) return;
+  if (i < 0 || i >= atom->nlocal) return;
+  const double inv_hbar = (force->hplanck > 0.0) ? (MathConst::MY_2PI / force->hplanck) : 0.0;
+  const double scale = atom->sp[i][3] * 2.0 * inv_hbar;
+  if (static_cast<size_t>(3 * i + 2) < fm_pair_snapshot_host_.size()) {
+    fmi[0] += scale * fm_pair_snapshot_host_[3 * i + 0];
+    fmi[1] += scale * fm_pair_snapshot_host_[3 * i + 1];
+    fmi[2] += scale * fm_pair_snapshot_host_[3 * i + 2];
+  } else if (atom->fm) {
+    fmi[0] += scale * atom->fm[i][0];
+    fmi[1] += scale * atom->fm[i][1];
+    fmi[2] += scale * atom->fm[i][2];
+  }
+}
+
+template<class DeviceType>
+void PairNEPSpinGPUKokkos<DeviceType>::compute_single_pair_one_side(int i, double *fmi)
+{
+  if (!fmi || !atom || !atom->sp) return;
+  if (i < 0 || i >= atom->nlocal) return;
+  const double inv_hbar = (force->hplanck > 0.0) ? (MathConst::MY_2PI / force->hplanck) : 0.0;
+  const double scale = atom->sp[i][3] * 2.0 * inv_hbar;
+  if (static_cast<size_t>(3 * i + 2) < fm_left_iface_host_.size()) {
+    fmi[0] += scale * fm_left_iface_host_[3 * i + 0];
+    fmi[1] += scale * fm_left_iface_host_[3 * i + 1];
+    fmi[2] += scale * fm_left_iface_host_[3 * i + 2];
+  } else if (atom->fm) {
+    fmi[0] += scale * atom->fm[i][0];
+    fmi[1] += scale * atom->fm[i][1];
+    fmi[2] += scale * atom->fm[i][2];
+  }
 }
 
 template<class DeviceType>
@@ -633,6 +709,13 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
     Kokkos::deep_copy(exec, d_fm_aos, 0.0);
     res.fm = (double *) d_fm_aos.data();
   }
+  if (d_fm_left_iface_aos.extent_int(0) != 3 * nall) {
+    d_fm_left_iface_aos = Kokkos::View<double*, DeviceType>(Kokkos::NoInit("nep_spin_gpu:fm_left_iface_aos"), 3 * nall);
+  }
+  Kokkos::deep_copy(exec, d_fm_left_iface_aos, 0.0);
+  res.fm_left_iface = (double *) d_fm_left_iface_aos.data();
+  res.iface_x = iface_x_;
+  res.iface_half_width = iface_half_width_;
   res.want_virial_raw9 = false;
   // Convention: spin magnitude is magnetic moment M in μB, and NEP outputs field = -dE/dM in eV/μB.
   res.inv_hbar = 1.0;
@@ -737,6 +820,21 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
         for (int k = 0; k < 9; ++k) cvatom[i][k] += h_v(idx + k);
       }
     }
+  }
+
+  {
+    const int nall3 = 3 * nall;
+    fm_pair_snapshot_host_.resize(nall3);
+    for (int i = 0; i < nall; ++i) {
+      fm_pair_snapshot_host_[3 * i + 0] = atom->fm[i][0];
+      fm_pair_snapshot_host_[3 * i + 1] = atom->fm[i][1];
+      fm_pair_snapshot_host_[3 * i + 2] = atom->fm[i][2];
+    }
+
+    auto h_fm_left = Kokkos::create_mirror_view(d_fm_left_iface_aos);
+    Kokkos::deep_copy(h_fm_left, d_fm_left_iface_aos);
+    fm_left_iface_host_.resize(nall3);
+    for (int i = 0; i < nall3; ++i) fm_left_iface_host_[i] = h_fm_left(i);
   }
 }
 
