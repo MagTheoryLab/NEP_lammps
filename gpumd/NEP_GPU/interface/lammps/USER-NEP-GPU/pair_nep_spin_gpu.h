@@ -45,7 +45,8 @@ class PairNEPSpinGPU : public Pair {
   void compute_single_pair_one_side(int, double *);
 
  private:
-  // The backend returns mforce = -dE/dM in eV/mu_B and we expose that directly.
+  // The backend returns mforce = -dE/dM in eV/mu_B; atom->fm is
+  // exposed in LAMMPS spin-frequency units.
   double cutoff{0.0};
   double cutoffsq_r_{0.0};
   double cutoffsq_a_{0.0};

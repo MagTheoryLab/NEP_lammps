@@ -274,9 +274,10 @@ void PairNEPSpinGPU::compute_single_pair(int i, double *fmi)
     fmi[1] += scale * fm_pair_snapshot_host_[3 * i + 1];
     fmi[2] += scale * fm_pair_snapshot_host_[3 * i + 2];
   } else if (atom->fm) {
-    fmi[0] += scale * atom->fm[i][0];
-    fmi[1] += scale * atom->fm[i][1];
-    fmi[2] += scale * atom->fm[i][2];
+    // atom->fm is already published in LAMMPS spin-frequency units.
+    fmi[0] += atom->fm[i][0];
+    fmi[1] += atom->fm[i][1];
+    fmi[2] += atom->fm[i][2];
   }
 }
 
@@ -291,9 +292,10 @@ void PairNEPSpinGPU::compute_single_pair_one_side(int i, double *fmi)
     fmi[1] += scale * fm_left_iface_host_[3 * i + 1];
     fmi[2] += scale * fm_left_iface_host_[3 * i + 2];
   } else if (atom->fm) {
-    fmi[0] += scale * atom->fm[i][0];
-    fmi[1] += scale * atom->fm[i][1];
-    fmi[2] += scale * atom->fm[i][2];
+    // atom->fm is already published in LAMMPS spin-frequency units.
+    fmi[0] += atom->fm[i][0];
+    fmi[1] += atom->fm[i][1];
+    fmi[2] += atom->fm[i][2];
   }
 }
 
@@ -815,15 +817,22 @@ void PairNEPSpinGPU::compute(int eflag_in, int vflag_in)
 
   // Accumulate forces and fm on local + ghost atoms; newton pair on means
   // LAMMPS will reverse-communicate both f and fm via AtomVecSpin.
+  //
+  // The NEP backend exposes the magnetic field H = -dE/dM in eV/mu_B.
+  // Keep that raw field in fm_pair_snapshot_host_ for compute_single_pair(),
+  // but publish atom->fm in the LAMMPS spin-dynamics frequency units expected
+  // by compute/spin and the rest of the SPIN package.
+  const double inv_hbar = (force->hplanck > 0.0) ? (MathConst::MY_2PI / force->hplanck) : 0.0;
   for (int neu = 0; neu < natoms_total; ++neu) {
     const int old = stable_ghost ? new_to_old[neu] : neu;
     atom->f[old][0] += res.f[3 * neu + 0];
     atom->f[old][1] += res.f[3 * neu + 1];
     atom->f[old][2] += res.f[3 * neu + 2];
 
-    atom->fm[old][0] += res.fm[3 * neu + 0];
-    atom->fm[old][1] += res.fm[3 * neu + 1];
-    atom->fm[old][2] += res.fm[3 * neu + 2];
+    const double fm_scale = atom->sp[old][3] * 2.0 * inv_hbar;
+    atom->fm[old][0] += fm_scale * res.fm[3 * neu + 0];
+    atom->fm[old][1] += fm_scale * res.fm[3 * neu + 1];
+    atom->fm[old][2] += fm_scale * res.fm[3 * neu + 2];
 
     fm_pair_snapshot_host_[3 * old + 0] = res.fm[3 * neu + 0];
     fm_pair_snapshot_host_[3 * old + 1] = res.fm[3 * neu + 1];

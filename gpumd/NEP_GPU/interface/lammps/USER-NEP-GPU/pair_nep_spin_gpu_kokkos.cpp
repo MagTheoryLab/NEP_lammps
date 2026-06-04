@@ -261,9 +261,10 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute_single_pair(int i, double *fmi)
     fmi[1] += scale * fm_pair_snapshot_host_[3 * i + 1];
     fmi[2] += scale * fm_pair_snapshot_host_[3 * i + 2];
   } else if (atom->fm) {
-    fmi[0] += scale * atom->fm[i][0];
-    fmi[1] += scale * atom->fm[i][1];
-    fmi[2] += scale * atom->fm[i][2];
+    // atom->fm is already published in LAMMPS spin-frequency units.
+    fmi[0] += atom->fm[i][0];
+    fmi[1] += atom->fm[i][1];
+    fmi[2] += atom->fm[i][2];
   }
 }
 
@@ -279,9 +280,10 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute_single_pair_one_side(int i, doubl
     fmi[1] += scale * fm_left_iface_host_[3 * i + 1];
     fmi[2] += scale * fm_left_iface_host_[3 * i + 2];
   } else if (atom->fm) {
-    fmi[0] += scale * atom->fm[i][0];
-    fmi[1] += scale * atom->fm[i][1];
-    fmi[2] += scale * atom->fm[i][2];
+    // atom->fm is already published in LAMMPS spin-frequency units.
+    fmi[0] += atom->fm[i][0];
+    fmi[1] += atom->fm[i][1];
+    fmi[2] += atom->fm[i][2];
   }
 }
 
@@ -686,9 +688,7 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
   // Backend writes AoS (x0,y0,z0,...) forces. If Kokkos stores forces in
   // LayoutLeft (SoA), compute into temporary AoS buffers and scatter-add.
   constexpr bool f_direct_ok = NepSpinKokkosForceAosTraits<decltype(d_f)>::direct_ok;
-  constexpr bool fm_direct_ok = NepSpinKokkosForceAosTraits<decltype(d_fm)>::direct_ok;
   constexpr bool need_scatter_f = !f_direct_ok;
-  constexpr bool need_scatter_fm = !fm_direct_ok;
 
   if constexpr (f_direct_ok) {
     res.f = (double *) d_f.data();
@@ -700,15 +700,15 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
     res.f = (double *) d_f_aos.data();
   }
 
-  if constexpr (fm_direct_ok) {
-    res.fm = (double *) d_fm.data();
-  } else {
-    if (d_fm_aos.extent_int(0) != 3 * nall) {
-      d_fm_aos = Kokkos::View<double*, DeviceType>(Kokkos::NoInit("nep_spin_gpu:fm_aos"), 3 * nall);
-    }
-    Kokkos::deep_copy(exec, d_fm_aos, 0.0);
-    res.fm = (double *) d_fm_aos.data();
+  // Always compute the NEP magnetic field into a raw AoS buffer.  The backend
+  // exposes H = -dE/dM in eV/mu_B; below we scatter a scaled copy into atom->fm
+  // in the LAMMPS spin-dynamics frequency units, while keeping this raw buffer
+  // for compute_single_pair().
+  if (d_fm_aos.extent_int(0) != 3 * nall) {
+    d_fm_aos = Kokkos::View<double*, DeviceType>(Kokkos::NoInit("nep_spin_gpu:fm_aos"), 3 * nall);
   }
+  Kokkos::deep_copy(exec, d_fm_aos, 0.0);
+  res.fm = (double *) d_fm_aos.data();
   if (d_fm_left_iface_aos.extent_int(0) != 3 * nall) {
     d_fm_left_iface_aos = Kokkos::View<double*, DeviceType>(Kokkos::NoInit("nep_spin_gpu:fm_left_iface_aos"), 3 * nall);
   }
@@ -746,20 +746,21 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
         d_f(i, 2) += d_f_aos_l(3 * i + 2);
       });
   }
-  if constexpr (need_scatter_fm) {
+  {
     auto d_fm_aos_l = d_fm_aos;
+    auto d_sp_l = d_sp;
+    const double inv_hbar_l = (force->hplanck > 0.0) ? (MathConst::MY_2PI / force->hplanck) : 0.0;
     Kokkos::parallel_for(
       Kokkos::RangePolicy<ExecSpace>(exec, 0, nall),
       KOKKOS_LAMBDA(const int i) {
-        d_fm(i, 0) += d_fm_aos_l(3 * i + 0);
-        d_fm(i, 1) += d_fm_aos_l(3 * i + 1);
-        d_fm(i, 2) += d_fm_aos_l(3 * i + 2);
+        const double fm_scale = d_sp_l(i, 3) * 2.0 * inv_hbar_l;
+        d_fm(i, 0) += fm_scale * d_fm_aos_l(3 * i + 0);
+        d_fm(i, 1) += fm_scale * d_fm_aos_l(3 * i + 1);
+        d_fm(i, 2) += fm_scale * d_fm_aos_l(3 * i + 2);
       });
   }
 
-  if constexpr (need_scatter_f || need_scatter_fm) {
-    exec.fence();
-  }
+  exec.fence();
 
   // Mark device-side force buffers as modified only after all device kernels have
   // finished (backend + optional scatter-add). This ensures any subsequent sync
@@ -824,12 +825,10 @@ void PairNEPSpinGPUKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
 
   {
     const int nall3 = 3 * nall;
+    auto h_fm_raw = Kokkos::create_mirror_view(d_fm_aos);
+    Kokkos::deep_copy(h_fm_raw, d_fm_aos);
     fm_pair_snapshot_host_.resize(nall3);
-    for (int i = 0; i < nall; ++i) {
-      fm_pair_snapshot_host_[3 * i + 0] = atom->fm[i][0];
-      fm_pair_snapshot_host_[3 * i + 1] = atom->fm[i][1];
-      fm_pair_snapshot_host_[3 * i + 2] = atom->fm[i][2];
-    }
+    for (int i = 0; i < nall3; ++i) fm_pair_snapshot_host_[i] = h_fm_raw(i);
 
     auto h_fm_left = Kokkos::create_mirror_view(d_fm_left_iface_aos);
     Kokkos::deep_copy(h_fm_left, d_fm_left_iface_aos);
