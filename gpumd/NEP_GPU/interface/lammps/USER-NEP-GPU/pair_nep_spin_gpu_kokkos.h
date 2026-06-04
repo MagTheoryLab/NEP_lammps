@@ -63,7 +63,8 @@ class PairNEPSpinGPUKokkos : public Pair {
   int neighflag{FULL};
   int eflag{0}, vflag{0};
 
-  // The backend returns mforce = -dE/dM in eV/mu_B and we expose that directly.
+  // The backend returns mforce = -dE/dM in eV/mu_B; atom->fm is
+  // exposed in LAMMPS spin-frequency units.
   double cutoff{0.0};
   double cutoffsq{0.0};
   int* type_map{nullptr}; // LAMMPS type -> NEP type
